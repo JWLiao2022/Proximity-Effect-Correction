@@ -18,7 +18,9 @@ class clsEstimatingDose(QThread):
         greyScaleLevelTypPattern = self.calculateGreyscaleLevelTypPattern()
 
         estDoseResLine = np.around(self.floatDoseforResDot * (greyScaleLevelResDot/greyScaleLevelResLine), 1)
+        #estDoseResLine = np.around(self.floatDoseforResDot * ((1.0-greyScaleLevelResLine)/(1.0-greyScaleLevelResDot)), 1)
         estDoseTypPattern = np.around(self.floatDoseforResDot * (greyScaleLevelResDot/greyScaleLevelTypPattern), 1)
+        #estDoseTypPattern = np.around(self.floatDoseforResDot * ((1.0-greyScaleLevelTypPattern)/(1.0-greyScaleLevelResDot)), 1)
 
         self.signalDoseForResLines.emit(estDoseResLine)
         self.signalDoseForTypPattern.emit(estDoseTypPattern)
@@ -27,7 +29,7 @@ class clsEstimatingDose(QThread):
 
 
     def calculateGreyscaleLevelDot(self):
-        #Create a np 2d array with centre 2px greyscale level = 255, and the rest level = 0
+        #Create a np 2d array with centre self.intResDotWidthPx greyscale level = 255, and the rest level = 0
         testArrayLength = 60
         inputNP2DArray = np.zeros(shape=(testArrayLength, testArrayLength))
         dotLeftPosition = int(testArrayLength/2)
@@ -39,7 +41,8 @@ class clsEstimatingDose(QThread):
         convolvedNP2DArray = ndimage.gaussian_filter(inputNP2DArray, self.sigma, order=0, output=None, mode='constant')
         #Obtain the greyscale level of the dot and return the greyscale level
         #returnedGreyscaleLevel = np.amax(convolvedNP2DArray)
-        returnedGreyscaleLevel = np.mean(convolvedNP2DArray, where=inputNP2DArray!=0)
+        #returnedGreyscaleLevel = np.mean(convolvedNP2DArray, where=inputNP2DArray!=0)
+        returnedGreyscaleLevel = np.max(convolvedNP2DArray)
 
         return returnedGreyscaleLevel
     
@@ -56,7 +59,8 @@ class clsEstimatingDose(QThread):
         convolvedNP2DArray = ndimage.gaussian_filter(inputNP2DArray, self.sigma, order=0, output=None, mode='constant')
         #Obtain the greyscale level of the dot and return the greyscale level
         #returnedGreyscaleLevel = np.amax(convolvedNP2DArray)
-        returnedGreyscaleLevel = np.mean(convolvedNP2DArray, where=inputNP2DArray!=0)
+        #returnedGreyscaleLevel = np.mean(convolvedNP2DArray, where=inputNP2DArray!=0)
+        returnedGreyscaleLevel = np.max(convolvedNP2DArray)
 
         return returnedGreyscaleLevel
     
@@ -70,5 +74,6 @@ class clsEstimatingDose(QThread):
         #Obtain the greyscale level of the dot and return the greyscale level
         #returnedGreyscaleLevel = np.amax(convolvedNP2DArray)
         returnedGreyscaleLevel = np.max(convolvedNP2DArray)
+        #returnedGreyscaleLevel = np.mean(convolvedNP2DArray)
 
         return returnedGreyscaleLevel
