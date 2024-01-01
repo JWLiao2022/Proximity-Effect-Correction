@@ -48,7 +48,7 @@ class clsOPCProcessingSingleThread(QThread):
         self.totalNumbersOfLayers = 0
         #Set threhold pixels to prevent the oupput image array occupying all the RAMs
         self.processing_image_shape_threshold = 8192
-        self.processing_image_padded_boundary = 16
+        self.processing_image_padded_boundary = 128
         self.currentProgress = 0
         self.progressStepSize = 100.
         #Set matplotlib objects
@@ -283,16 +283,6 @@ class clsOPCProcessingSingleThread(QThread):
                     regionOfInterest = processingSubImage[returnStartingPixelY:returnEndingPixelY, returnStartingPixelX:returnEndingPixelX]
                     regionOfInterestMax = np.amax(regionOfInterest)
                     inputImageMax = np.amax(processingSubImage)
-                    #Save the processingSubImage image
-                    #outputImageName = "processingSubImage " + str(j) + "-" + str(i) + ".png"
-                    #outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
-                    #outputImage = processingSubImage.astype(np.uint8)
-                    #cv2.imwrite(outputCurrentImageFullPath, outputImage)
-                    #Save the regionOfInterest image
-                    #outputImageName = "Region of interest " + str(j) + "-" + str(i) + ".png"
-                    #outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
-                    #outputImage = regionOfInterest.astype(np.uint8)
-                    #cv2.imwrite(outputCurrentImageFullPath, outputImage)
                     
                     #Updating the input image
                     #Only update when the image pixel sizes < 2 * processing_image_shape_threshold
@@ -345,19 +335,6 @@ class clsOPCProcessingSingleThread(QThread):
                 outputImageName = "Layer " + str(layer_number) + ".str"
                 outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
                 self.ftnSaveSTRFile3(self.outputImageArray, outputCurrentImageFullPath, int(imageShapeX), int(imageShapeY), j)
-
-                #Save the processed output image as png for the debug purpose.
-                #outputImageName = "Layer " + str(layer_number) + ".png"
-                #outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
-                #outputImage = self.outputImageArray.astype(np.uint8)
-                #cv2.imwrite(outputCurrentImageFullPath, outputImage)
-                #print(outputImage)
-
-                #Save the convoluted image
-                #outputImageName = "Convoluted Layer " + str(layer_number) + ".png"
-                #outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
-                #outputImage = self.convolutedImageArray.astype(np.uint8)
-                #cv2.imwrite(outputCurrentImageFullPath, outputImage)
 
                 #Clear the memory
                 self.outputImageArray = np.ones((1, 1), dtype=np.uint8)
@@ -453,18 +430,16 @@ class clsOPCProcessingSingleThread(QThread):
             #npArrayNormInputImage = self.ftnNormalisingImageVectorisation2(npArrayNormInputImage, npArrayConvolutedImage)
             start = time.perf_counter()
             npArrayNormInputImage = self.ftnNormalisingImageVectorisation3(npArrayNormInputImage, npArrayConvolutedImage)
+            #npArrayNormInputImage = self.ftnNormalisingImageVectorisation2(npArrayNormInputImage, npArrayConvolutedImage)
             end = time.perf_counter()
             elapsed = end - start
             self.signalStatusUpdate.emit(f"Function self.ftnNormalisingImageVectorisation3 took {elapsed:.6f} seconds."+"\n")
             #Update the progress bar
             self.currentProgress += self.progressStepSize
             self.signalUpdateProgress.emit(self.currentProgress)
-            i += 1
         
         #Calculate the final greyscale level
-        #npArrayNormInputImage = self.ftnCalculateFinalGreyscaleLevelVectorisation(npArrayNormInputImage)
-        #self.convolutedImageArray = np.clip(np.multiply(self.convolutedImageArray, 255), 0, 255).astype(np.uint8) 
-        npOutputImageArray = np.clip(np.multiply(npArrayNormInputImage, 255), 0, 255).astype(np.uint8)
+        npOutputImageArray = np.around(np.multiply(npArrayNormInputImage, 255.0), 0).astype(np.uint8)
 
         #Return output image array
         return npOutputImageArray
@@ -482,29 +457,13 @@ class clsOPCProcessingSingleThread(QThread):
     #@jit()
     def ftnNormalisingImageVectorisation3(self, originalImage, convolutedImage):
         npArrayInputImage = np.around(originalImage, 1)
-        #npArrayCorrectionFactor = np.subtract(0.5, convolutedImage, where=np.around(originalImage, 1)!=0)
-        npArrayCorrectionFactor = np.subtract(0.5, convolutedImage)
-        npArrayCorrectedImage = np.add(npArrayInputImage, npArrayCorrectionFactor, where=np.around(originalImage, 1)!=0)
-        #npArrayCorrectedImage = np.add(npArrayInputImage, npArrayCorrectionFactor)
+        max_CorrectedFactor = 1.0/self.calculateGreyscaleLevelDot()
+        npArrayCorrectionFactor = np.clip(np.divide(1.0, convolutedImage, where=np.around(originalImage, 1)!=0), None, max_CorrectedFactor)
+        npArrayCorrectedImage = np.multiply(npArrayInputImage, npArrayCorrectionFactor, where=np.around(originalImage, 1)!=0)
         max_CorrecedImage = np.amax(npArrayCorrectedImage)
         normed_CorrectedImage = np.around(np.divide(npArrayCorrectedImage, max_CorrecedImage), 1)
 
         return normed_CorrectedImage
-
-    #@jit()
-    def ftnCalculateFinalGreyscaleLevelVectorisation(self, inputImage):
-        #npArrayInputImage = np.around(inputImage,1)
-        npArrayInputImage = inputImage
-        #Calculate the greyscale level for a give pixels dot
-        normalisingGreyScaleLevel = self.calculateGreyscaleLevelDot() * 255.0
-        #Convolute the inputImage
-        convolvedImage = ndimage.gaussian_filter(npArrayInputImage, self.sigma, order=0, output=None, mode='constant')
-        #Normalise the greyscale levels in the output image
-        normalisedConvolvedImage = np.divide(normalisingGreyScaleLevel, convolvedImage, where=np.around(npArrayInputImage, 1)!=0)
-        #Calculate the final greyscale levels in the output image
-        npArrayOutputImage = np.multiply(normalisedConvolvedImage, npArrayInputImage, where=np.around(npArrayInputImage, 1)!=0)
-
-        return npArrayOutputImage
 
     def calculateGreyscaleLevelDot(self):
         #Create a np 2d array with centre 2px greyscale level = 255, and the rest level = 0
@@ -518,8 +477,8 @@ class clsOPCProcessingSingleThread(QThread):
         #Convolute this array with the Gaussian kernel of the user-input sigma value
         convolvedNP2DArray = ndimage.gaussian_filter(inputNP2DArray, self.sigma, order=0, output=None, mode='constant')
         #Obtain the greyscale level of the dot and return the greyscale level
-        #returnedGreyscaleLevel = np.amax(convolvedNP2DArray)
-        returnedGreyscaleLevel = np.mean(convolvedNP2DArray, where=inputNP2DArray!=0)
+        returnedGreyscaleLevel = np.amax(convolvedNP2DArray)
+        #returnedGreyscaleLevel = np.mean(convolvedNP2DArray, where=inputNP2DArray!=0)
 
         #print("{} Returned greyscale level = {}".format(self.format_time(), returnedGreyscaleLevel))
         self.signalStatusUpdate.emit("{} Returned greyscale level = {}. \n".format(self.format_time(), returnedGreyscaleLevel))
