@@ -1,3 +1,5 @@
+#This is the version with attempts to speed up the overally process
+
 import sys
 import os
 

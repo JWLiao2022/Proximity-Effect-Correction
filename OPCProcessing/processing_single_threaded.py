@@ -20,6 +20,8 @@ import gc
 
 import tracemalloc
 
+import time
+
 class clsOPCProcessingSingleThread(QThread):
     finished = Signal()
     signalUpdateInputImage = Signal(int)
@@ -40,11 +42,13 @@ class clsOPCProcessingSingleThread(QThread):
         self.normalised_dot_width = dotWidth
         self.inputImageArray = np.ones((1, 1), dtype=np.uint8)
         self.outputImageArray = np.ones((1, 1), dtype=np.uint8)
+        self.convolutedImageArray = np.ones((1, 1,), dtype=np.uint8)
         self.txtStatusUpdate = ""
         self.layers = {} # Array to hold all geometry, sorted into layers
         self.totalNumbersOfLayers = 0
         #Set threhold pixels to prevent the oupput image array occupying all the RAMs
         self.processing_image_shape_threshold = 8192
+        self.processing_image_padded_boundary = 16
         self.currentProgress = 0
         self.progressStepSize = 100.
         #Set matplotlib objects
@@ -63,7 +67,7 @@ class clsOPCProcessingSingleThread(QThread):
         #Read the input file using the gdspy library
         gdsii = gdspy.GdsLibrary()
         gdsii.read_gds(self.gdsii_file_path, units='import')
-        layers = {} # array to hold all geometry, sorted into layers
+        layers = {} # dictionary to hold all geometry, sorted into layers
         cells = gdsii.top_level()
         for cell in cells:
             if cell.name == '$$$CONTEXT_INFO$$$':
@@ -103,8 +107,8 @@ class clsOPCProcessingSingleThread(QThread):
         outputPositionFileName = "layerPositions.txt"
         outputPositonsFileFullPath = os.path.join(self.current_directory, outputPositionFileName)
         with open(outputPositonsFileFullPath, 'w') as f:
-                f.write('Layer and its central position (mm)')
-                f.write('\n')
+            f.write('Layer and its central position (mm)')
+            f.write('\n')
 
         #Find the centre position for each layer
         #Produce the corresponding np array and output a bmp file for each layer
@@ -112,13 +116,13 @@ class clsOPCProcessingSingleThread(QThread):
         for layer_number, polygons in layers.items():
             #Report status
             txtStatusReport = "{} Processing the layer number {}.\n".format(self.format_time(), layer_number)
-            print(txtStatusReport)
+            #print(txtStatusReport)
             self.signalStatusUpdate.emit(txtStatusReport)
 
             #Clear the existing image views
             self.signalClearImageViews.emit()
             
-            #Initialise a np 2D array to collect max values and min values in X and in Y
+            #Initialise a list to collect max values and min values in X and in Y
             listMaxValuesX = []
             listMinValuesX = []
             listMaxValuesY = []
@@ -144,7 +148,7 @@ class clsOPCProcessingSingleThread(QThread):
             centrePositionXMM = np.around(centrePositionX/1000, 6)
             centrePositionYMM = np.around(centrePositionY/1000, 6)
             txtStatusReport = "{} Centre position of the layer number {} is at ({} mm, {} mm).\n".format(self.format_time(), layer_number, centrePositionXMM, centrePositionYMM)
-            print(txtStatusReport)
+            #print(txtStatusReport)
             self.signalStatusUpdate.emit(txtStatusReport)
             
             #Output the center position of this layer
@@ -175,11 +179,11 @@ class clsOPCProcessingSingleThread(QThread):
             numbersOfSubImagesY = int(np.ceil(imageShapeY/self.processing_image_shape_threshold))
             totalNumbersOfSubImages = numbersOfSubImagesX * numbersOfSubImagesY
             
-            #Start processing the curent image
-            #Considering the threshold pixels
-            #Divide total image into sub images
-            #Each sub image is with the pixel processedImageShapeThreshold
-            #self.outputImageArray = np.ones((int(imageShapeY), int(imageShapeX)), dtype = np.uint16)
+            #Start processing the curent image.
+            #Considering the threshold pixels.
+            #Divide total image into sub images.
+            #Each sub image is with the pixel processedImageShapeThreshold.
+            #Only update the input image when the total image size is smaller than 10*processing_image_shape_threshold.
             if (imageShapeX <= (10 * self.processing_image_shape_threshold)) and (imageShapeY <= (10 * self.processing_image_shape_threshold)):
                 self.inputImageArray = np.ones((int(imageShapeY), int(imageShapeX)), dtype = np.uint16)
             else:
@@ -188,30 +192,47 @@ class clsOPCProcessingSingleThread(QThread):
             #Set up the progress bar step size
             self.progressStepSize = int(np.floor(100/((totalNumbersOfLayers * totalNumbersOfSubImages * self.iterations))))
             self.signalStatusUpdate.emit("{} Step size of the progress bar is {}.\n".format(self.format_time(), self.progressStepSize))
-
+            
+            #Report numbers of sub images for debug purpose
+            self.signalStatusUpdate.emit("Numbers of sub images in X = {}, numbers of sub images in Y = {}.\n".format(numbersOfSubImagesX, numbersOfSubImagesY))
+            
             #Calculation begins
+            #Find the region of interest among the overall image.
             for j in range(numbersOfSubImagesY):
                 if j == 0:
                     startingPixelY = 0
                     subImageStartingPixelY = 0
                     returnStartingPixelY = 0
+                elif (j * processedImageShapeY - self.processing_image_padded_boundary) < 0:
+                    startingPixelY = 0
+                    subImageStartingPixelY = j * processedImageShapeY
+                    returnStartingPixelY = subImageStartingPixelY
                 else:
-                    startingPixelY = (j - 1) * processedImageShapeY 
-                    subImageStartingPixelY = startingPixelY + processedImageShapeY
-                    returnStartingPixelY = processedImageShapeY
+                    #startingPixelY = (j - 1) * processedImageShapeY 
+                    startingPixelY = (j * processedImageShapeY) - self.processing_image_padded_boundary
+                    #subImageStartingPixelY = startingPixelY + processedImageShapeY
+                    subImageStartingPixelY = startingPixelY + self.processing_image_padded_boundary
+                    #returnStartingPixelY = processedImageShapeY
+                    returnStartingPixelY = self.processing_image_padded_boundary
                 if j == numbersOfSubImagesY - 1:
                     endingPixelY = int(imageShapeY)
                     subImageEndingPixelY = endingPixelY
                     returnEndingPixelY = endingPixelY
-                elif (j + 2) * processedImageShapeY > int(imageShapeY):
+                #elif (j + 2) * processedImageShapeY > int(imageShapeY):
+                elif (((j + 1) * processedImageShapeY) + self.processing_image_padded_boundary) > int(imageShapeY):
                     endingPixelY = int(imageShapeY)
                     subImageEndingPixelY = subImageStartingPixelY + processedImageShapeY
                     returnEndingPixelY = returnStartingPixelY + processedImageShapeY
                 else:
-                    endingPixelY = (j + 2) * processedImageShapeY
+                    #endingPixelY = (j + 2) * processedImageShapeY
+                    endingPixelY = ((j + 1) * processedImageShapeY) + self.processing_image_padded_boundary
                     subImageEndingPixelY = subImageStartingPixelY + processedImageShapeY
                     returnEndingPixelY = returnStartingPixelY + processedImageShapeY
                 
+                #print out the pixel positions for debug purposes.
+                #self.signalStatusUpdate.emit("j = {}, startingPixelY = {}, subImageStartingPixelY = {}, returnStartingPixelY = {}.\n".format(j, startingPixelY, subImageStartingPixelY, returnStartingPixelY))
+                #self.signalStatusUpdate.emit("j = {}, endingPixelY = {}, subImageEndingPixelY = {}, returnEndingPixelY = {}.\n".format(j, endingPixelY, subImageEndingPixelY, returnEndingPixelY))
+
                 #Define the temp output image array
                 outputImageArrayNumPixelsY = subImageEndingPixelY - subImageStartingPixelY
                 self.outputImageArray = np.ones((outputImageArrayNumPixelsY, int(imageShapeX)), dtype=np.uint16)
@@ -219,7 +240,7 @@ class clsOPCProcessingSingleThread(QThread):
                 for i in range(numbersOfSubImagesX):
                     #Update the current status
                     txtStatusReport = "{} Processing images {}/{}, i = {}, j = {}.\n".format(self.format_time(), i + (j * numbersOfSubImagesX) + 1, totalNumbersOfSubImages, i, j)
-                    print(txtStatusReport)
+                    #print(txtStatusReport)
                     self.signalStatusUpdate.emit(txtStatusReport)
                     #Cut out the sub image from the full image for convolution and normalisation
                     #Find the position ((startingPixelX, startingPixelY), (endingPixelX, endingPixelY)) of the sub image in the full image
@@ -227,28 +248,51 @@ class clsOPCProcessingSingleThread(QThread):
                         startingPixelX = 0
                         subImageStartingPixelX = 0
                         returnStartingPixelX = 0
+                    elif (i * processedImageShapeX - self.processing_image_padded_boundary) < 0:
+                        startingPixelX = 0
+                        subImageStartingPixelX = i * processedImageShapeX
+                        returnStartingPixelX = subImageStartingPixelX
                     else:
-                        startingPixelX = (i - 1) * processedImageShapeX
-                        subImageStartingPixelX = startingPixelX + processedImageShapeX
-                        returnStartingPixelX = processedImageShapeX
+                        #startingPixelX = (i - 1) * processedImageShapeX
+                        startingPixelX = i * processedImageShapeX - self.processing_image_padded_boundary
+                        #subImageStartingPixelX = startingPixelX + processedImageShapeX
+                        subImageStartingPixelX = startingPixelX + self.processing_image_padded_boundary
+                        #returnStartingPixelX = processedImageShapeX
+                        returnStartingPixelX = self.processing_image_padded_boundary
                     if i == numbersOfSubImagesX - 1:
                         endingPixelX = int(imageShapeX)
                         subImageEndingPixelX = endingPixelX
                         returnEndingPixelX = endingPixelX
-                    elif (i + 2) * processedImageShapeX > int(imageShapeX):
+                    #elif (i + 2) * processedImageShapeX > int(imageShapeX):
+                    elif (((i + 1) * processedImageShapeX) + self.processing_image_padded_boundary) > int(imageShapeX):
                         endingPixelX = int(imageShapeX)
                         subImageEndingPixelX = subImageStartingPixelX + processedImageShapeX
                         returnEndingPixelX = returnStartingPixelX + processedImageShapeX
                     else:
-                        endingPixelX = (i + 2) * processedImageShapeX
+                        #endingPixelX = (i + 2) * processedImageShapeX
+                        endingPixelX = ((i + 1) * processedImageShapeX) + self.processing_image_padded_boundary
                         subImageEndingPixelX = subImageStartingPixelX + processedImageShapeX
                         returnEndingPixelX = returnStartingPixelX + processedImageShapeX
 
                     #Copy the sub image from the main image
+                    start = time.perf_counter()
                     processingSubImage = self.ftnFindCurrentRegionOfInterest(polygons, startingPixelX, endingPixelX, startingPixelY, endingPixelY, shiftInX, shiftInY, imageShapeX, imageShapeY, j, numbersOfSubImagesY, (subImageEndingPixelY - subImageStartingPixelY))
+                    end = time.perf_counter()
+                    elapsed = end - start
+                    self.signalStatusUpdate.emit(f"self.ftnFindCurrentRegionOfInterest took {elapsed:.6f} seconds."+"\n")
                     regionOfInterest = processingSubImage[returnStartingPixelY:returnEndingPixelY, returnStartingPixelX:returnEndingPixelX]
                     regionOfInterestMax = np.amax(regionOfInterest)
                     inputImageMax = np.amax(processingSubImage)
+                    #Save the processingSubImage image
+                    #outputImageName = "processingSubImage " + str(j) + "-" + str(i) + ".png"
+                    #outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
+                    #outputImage = processingSubImage.astype(np.uint8)
+                    #cv2.imwrite(outputCurrentImageFullPath, outputImage)
+                    #Save the regionOfInterest image
+                    #outputImageName = "Region of interest " + str(j) + "-" + str(i) + ".png"
+                    #outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
+                    #outputImage = regionOfInterest.astype(np.uint8)
+                    #cv2.imwrite(outputCurrentImageFullPath, outputImage)
                     
                     #Updating the input image
                     #Only update when the image pixel sizes < 2 * processing_image_shape_threshold
@@ -272,7 +316,11 @@ class clsOPCProcessingSingleThread(QThread):
                     #Only process when the image is not empty
                     self.signalStatusUpdate.emit("{} regionOfInterestMax = {}.\n".format(self.format_time(), regionOfInterestMax))
                     if np.amax(regionOfInterestMax) > 1:
+                        start = time.perf_counter()
                         processedSubOutputImage = self.ftnConsumerProcessImage2(processingSubImage, inputImageMax)
+                        end = time.perf_counter()
+                        elapsed = end - start
+                        self.signalStatusUpdate.emit(f"self.ftnConsumerProcessImage2 took {elapsed:.6f} seconds."+"\n")
                         #Return this sub image back to the output array
                         self.outputImageArray[:, subImageStartingPixelX:subImageEndingPixelX] = processedSubOutputImage[returnStartingPixelY:returnEndingPixelY, returnStartingPixelX:returnEndingPixelX]
 
@@ -298,6 +346,19 @@ class clsOPCProcessingSingleThread(QThread):
                 outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
                 self.ftnSaveSTRFile3(self.outputImageArray, outputCurrentImageFullPath, int(imageShapeX), int(imageShapeY), j)
 
+                #Save the processed output image as png for the debug purpose.
+                #outputImageName = "Layer " + str(layer_number) + ".png"
+                #outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
+                #outputImage = self.outputImageArray.astype(np.uint8)
+                #cv2.imwrite(outputCurrentImageFullPath, outputImage)
+                #print(outputImage)
+
+                #Save the convoluted image
+                #outputImageName = "Convoluted Layer " + str(layer_number) + ".png"
+                #outputCurrentImageFullPath = os.path.join(self.current_directory, outputImageName)
+                #outputImage = self.convolutedImageArray.astype(np.uint8)
+                #cv2.imwrite(outputCurrentImageFullPath, outputImage)
+
                 #Clear the memory
                 self.outputImageArray = np.ones((1, 1), dtype=np.uint8)
                 gc.collect()
@@ -318,7 +379,7 @@ class clsOPCProcessingSingleThread(QThread):
         now = datetime.now()
         strNow = now.strftime('%d-%m-%Y %H:%M:%S.%f')
 
-        return strNow[:-3]
+        return strNow[:-5]
     
     def ftnFindCurrentRegionOfInterest(self, polygons, startingPixelPositionX, endingPixelPositionX, startingPixelPositionY, endingPixelPositionY, shiftInX, shiftInY, imageShapeX, imageShapeY, j, numbersOfSubImagesY, subProcessedImageShapeY):
         #Initialise the parameters
@@ -340,7 +401,7 @@ class clsOPCProcessingSingleThread(QThread):
             elif j == 0:
                 N = np.array([[shiftInX + startingPixelPositionX, shiftInY + startingPixelPositionY + (imageShapeY - endingPixelPositionY)]]).astype(np.float32)
             else:
-                N = np.array([[shiftInX + startingPixelPositionX, shiftInY + startingPixelPositionY + (imageShapeY - endingPixelPositionY) - ((j - 1) * subProcessedImageShapeY)]]).astype(np.float32)
+                N = np.array([[shiftInX + startingPixelPositionX, shiftInY + startingPixelPositionY + (imageShapeY - endingPixelPositionY) - ((j) * subProcessedImageShapeY - self.processing_image_padded_boundary)]]).astype(np.float32)
             
             pixelSizeArray = np.array([self.pixel_size_X, self.pixel_size_Y]).astype(np.float32)
             #Normalise the polygon to the pixel size
@@ -381,16 +442,29 @@ class clsOPCProcessingSingleThread(QThread):
         #Loop through iterations
         for i in range(self.iterations):
             #Convolute the image
+            start = time.perf_counter()
             npArrayConvolutedImage = ndimage.gaussian_filter(npArrayNormInputImage, self.sigma, order=0, output=None, mode='constant')
+            end = time.perf_counter()
+            elapsed = end - start
+            self.signalStatusUpdate.emit(f"Function ndimage.gaussian_filter took {elapsed:.6f} seconds."+"\n")
+            #Output the npArrayConvolutedImage for the debug purpose
+            self.convolutedImageArray = npArrayConvolutedImage
             #Correct the image
-            npArrayNormInputImage = self.ftnNormalisingImageVectorisation2(npArrayNormInputImage, npArrayConvolutedImage)
+            #npArrayNormInputImage = self.ftnNormalisingImageVectorisation2(npArrayNormInputImage, npArrayConvolutedImage)
+            start = time.perf_counter()
+            npArrayNormInputImage = self.ftnNormalisingImageVectorisation3(npArrayNormInputImage, npArrayConvolutedImage)
+            end = time.perf_counter()
+            elapsed = end - start
+            self.signalStatusUpdate.emit(f"Function self.ftnNormalisingImageVectorisation3 took {elapsed:.6f} seconds."+"\n")
             #Update the progress bar
             self.currentProgress += self.progressStepSize
             self.signalUpdateProgress.emit(self.currentProgress)
+            i += 1
         
         #Calculate the final greyscale level
-        npArrayNormInputImage = self.ftnCalculateFinalGreyscaleLevelVectorisation(npArrayNormInputImage)
-        npOutputImageArray = np.clip(npArrayNormInputImage, 0, 255).astype(np.uint16)
+        #npArrayNormInputImage = self.ftnCalculateFinalGreyscaleLevelVectorisation(npArrayNormInputImage)
+        #self.convolutedImageArray = np.clip(np.multiply(self.convolutedImageArray, 255), 0, 255).astype(np.uint8) 
+        npOutputImageArray = np.clip(np.multiply(npArrayNormInputImage, 255), 0, 255).astype(np.uint8)
 
         #Return output image array
         return npOutputImageArray
@@ -404,6 +478,18 @@ class clsOPCProcessingSingleThread(QThread):
         normed_ConvolutedImage = np.around(np.divide(arrayCorrectFactor, max_correctFactorArray), 1)
 
         return normed_ConvolutedImage
+    
+    #@jit()
+    def ftnNormalisingImageVectorisation3(self, originalImage, convolutedImage):
+        npArrayInputImage = np.around(originalImage, 1)
+        #npArrayCorrectionFactor = np.subtract(0.5, convolutedImage, where=np.around(originalImage, 1)!=0)
+        npArrayCorrectionFactor = np.subtract(0.5, convolutedImage)
+        npArrayCorrectedImage = np.add(npArrayInputImage, npArrayCorrectionFactor, where=np.around(originalImage, 1)!=0)
+        #npArrayCorrectedImage = np.add(npArrayInputImage, npArrayCorrectionFactor)
+        max_CorrecedImage = np.amax(npArrayCorrectedImage)
+        normed_CorrectedImage = np.around(np.divide(npArrayCorrectedImage, max_CorrecedImage), 1)
+
+        return normed_CorrectedImage
 
     #@jit()
     def ftnCalculateFinalGreyscaleLevelVectorisation(self, inputImage):
@@ -435,7 +521,7 @@ class clsOPCProcessingSingleThread(QThread):
         #returnedGreyscaleLevel = np.amax(convolvedNP2DArray)
         returnedGreyscaleLevel = np.mean(convolvedNP2DArray, where=inputNP2DArray!=0)
 
-        print("{} Returned greyscale level = {}".format(self.format_time(), returnedGreyscaleLevel))
+        #print("{} Returned greyscale level = {}".format(self.format_time(), returnedGreyscaleLevel))
         self.signalStatusUpdate.emit("{} Returned greyscale level = {}. \n".format(self.format_time(), returnedGreyscaleLevel))
 
         return returnedGreyscaleLevel
