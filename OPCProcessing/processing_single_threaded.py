@@ -379,7 +379,7 @@ class clsOPCProcessingSingleThread(QThread):
         now = datetime.now()
         strNow = now.strftime('%d-%m-%Y %H:%M:%S.%f')
 
-        return strNow[:-3]
+        return strNow[:-5]
     
     def ftnFindCurrentRegionOfInterest(self, polygons, startingPixelPositionX, endingPixelPositionX, startingPixelPositionY, endingPixelPositionY, shiftInX, shiftInY, imageShapeX, imageShapeY, j, numbersOfSubImagesY, subProcessedImageShapeY):
         #Initialise the parameters
